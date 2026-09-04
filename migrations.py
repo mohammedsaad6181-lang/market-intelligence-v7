@@ -46,16 +46,31 @@ def column_names(con,table):
     return {r[1] for r in con.execute(f"PRAGMA table_info({table})").fetchall()}
 
 def migrate():
-    con=sqlite3.connect(DB_PATH)
-    con.execute("PRAGMA journal_mode=WAL")
-    ensure_base_schema(con)
-    for table,cols in COLUMNS.items():
-        existing=column_names(con,table)
-        for col,typ in cols.items():
-            if col not in existing:
-                con.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
-    con.commit()
-    con.close()
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    try:
+        con.execute("PRAGMA journal_mode=WAL")
+        con.execute("PRAGMA busy_timeout=30000")
+        con.execute("BEGIN IMMEDIATE")
+        ensure_base_schema(con)
+
+        for table, cols in COLUMNS.items():
+            for col, typ in cols.items():
+                if col in column_names(con, table):
+                    continue
+                try:
+                    con.execute(
+                        f'ALTER TABLE "{table}" ADD COLUMN "{col}" {typ}'
+                    )
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e).lower():
+                        raise
+
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 if __name__=="__main__":
     migrate()
